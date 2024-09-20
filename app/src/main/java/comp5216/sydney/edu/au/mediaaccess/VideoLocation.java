@@ -2,7 +2,10 @@ package comp5216.sydney.edu.au.mediaaccess;
 
 import java.io.Serializable; // Import the Serializable interface
 
-public class VideoLocation implements Serializable { // Make the class implement Serializable
+/**
+ * VideoLocation class represents a location with a video URI.
+ */
+public class VideoLocation implements Serializable {
 
     private double latitude;
     private double longitude;
@@ -14,7 +17,6 @@ public class VideoLocation implements Serializable { // Make the class implement
         this.videoUriPath = videoUriPath;
     }
 
-    // Getters and Setters for each property (latitude, longitude, videoUri)
     public double getLatitude() {
         return latitude;
     }

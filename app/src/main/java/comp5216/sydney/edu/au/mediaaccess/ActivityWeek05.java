@@ -9,15 +9,14 @@ import android.graphics.BitmapFactory;
 import android.location.Address;
 import android.location.Geocoder;
 import android.location.Location;
+import android.location.LocationManager;
 import android.media.ExifInterface;
 import android.media.MediaPlayer;
 import android.media.MediaPlayer.OnPreparedListener;
-import android.media.MediaRecorder;
 import android.media.MediaScannerConnection;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
-import android.os.Environment;
 import android.provider.MediaStore;
 import android.util.Log;
 import android.view.View;
@@ -31,12 +30,14 @@ import androidx.core.content.ContextCompat;
 import androidx.core.content.FileProvider;
 
 import com.google.android.gms.location.FusedLocationProviderClient;
+import com.google.android.gms.location.LocationAvailability;
 import com.google.android.gms.location.LocationCallback;
 import com.google.android.gms.location.LocationRequest;
 import com.google.android.gms.location.LocationResult;
 import com.google.android.gms.location.LocationServices;
 import com.google.android.gms.tasks.OnFailureListener;
 import com.google.android.gms.tasks.OnSuccessListener;
+import com.google.android.gms.tasks.Task;
 import com.google.firebase.storage.FirebaseStorage;
 import com.google.firebase.storage.StorageReference;
 import com.google.firebase.storage.UploadTask;
@@ -61,15 +62,9 @@ public class ActivityWeek05 extends Activity {
     private static final int MY_PERMISSIONS_REQUEST_READ_PHOTOS = 102;
     private static final int MY_PERMISSIONS_REQUEST_RECORD_VIDEO = 103;
     private static final int MY_PERMISSIONS_REQUEST_READ_VIDEOS = 104;
-    private static final int MY_PERMISSIONS_REQUEST_RECORD_AUDIO = 105;
-    private static final int MY_PERMISSIONS_REQUEST_FINE_LOCATION = 106;
-    private static final int MY_PERMISSIONS_REQUEST_COARSE_LOCATION = 107;
     public final String APP_TAG = "MobileComputingTutorial";
-    private final MediaRecorder recorder = null;
-    private final MediaPlayer player = null;
     public String photoFileName = "photo.jpg";
     public String videoFileName = "video.mp4";
-    public String audioFileName = "audio.3gp";
     MarshmallowPermission marshmallowPermission = new MarshmallowPermission(this);
     private FirebaseStorage storage;
     private StorageReference storageRef;
@@ -112,7 +107,6 @@ public class ActivityWeek05 extends Activity {
 
         // Create a storage reference from our app
         storageRef = storage.getReference();
-        StorageReference imagesRef = storageRef.child("images");
         geocoder = new Geocoder(this.getApplicationContext(), Locale.getDefault());
     }
 
@@ -190,20 +184,6 @@ public class ActivityWeek05 extends Activity {
         }
     }
 
-    // Returns the Uri for a photo/media stored on disk given the fileName
-    public Uri getFileUri(String fileName) {
-        // Get safe storage directory for photos
-        File mediaStorageDir = new File(getExternalFilesDir(Environment.getExternalStorageDirectory().toString()), APP_TAG);
-
-        // Create the storage directory if it does not exist
-        if (!mediaStorageDir.exists() && !mediaStorageDir.mkdirs()) {
-            Log.d(APP_TAG, "failed to create directory");
-        }
-
-        // Return the file target for the photo based on filename
-        return Uri.fromFile(new File(mediaStorageDir.getPath() + File.separator + fileName));
-    }
-
     private void scanFile(String path) {
 
         MediaScannerConnection.scanFile(ActivityWeek05.this,
@@ -259,11 +239,13 @@ public class ActivityWeek05 extends Activity {
         mVideoView.setVisibility(View.GONE);
         ivPreview.setVisibility(View.GONE);
 
+        // If the camera has been opened for a photo
         if (requestCode == MY_PERMISSIONS_REQUEST_OPEN_CAMERA) {
             if (resultCode == RESULT_OK) {
                 Bitmap takenImage = BitmapFactory.decodeFile(file.getAbsolutePath());
                 scanFile(file.getAbsolutePath());
 
+                // Check permission for location
                 if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED && ActivityCompat.checkSelfPermission(this, android.Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
                     // TODO: Consider calling
                     //    ActivityCompat#requestPermissions
@@ -275,91 +257,117 @@ public class ActivityWeek05 extends Activity {
                     return;
                 }
 
+                // Attempts to get the last location if still valid
                 fusedLocationClient.getLastLocation()
                         .addOnSuccessListener(this, new OnSuccessListener<Location>() {
+
                             @Override
                             public void onSuccess(Location location) {
-                                // Got last known location. In some rare situations this can be null.
-                                if (location != null) {
-                                    // Logic to handle location object
-                                    double latitude = location.getLatitude();
-                                    double longitude = location.getLongitude();
-                                    try {
-                                        addLatLonToMetadata(file.getAbsolutePath(), latitude, longitude);
-                                        Log.d("Location Added", String.valueOf(latitude));
-                                        Toast.makeText(ActivityWeek05.this, "Location Added", Toast.LENGTH_SHORT).show();
-                                    } catch (IOException e) {
-                                        throw new RuntimeException(e);
-                                    }
+                                if (ActivityCompat.checkSelfPermission(getApplicationContext(), android.Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED && ActivityCompat.checkSelfPermission(getApplicationContext(), android.Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+                                    // TODO: Consider calling
+                                    //    ActivityCompat#requestPermissions
+                                    // here to request the missing permissions, and then overriding
+                                    //   public void onRequestPermissionsResult(int requestCode, String[] permissions,
+                                    //                                          int[] grantResults)
+                                    // to handle the case where the user grants the permission. See the documentation
+                                    // for ActivityCompat#requestPermissions for more details.
+                                    return;
+                                }
 
-                                    String city = "Unknown";
-                                    try {
-                                        city = getCityFromLatLong(latitude, longitude);
-                                    } catch (IOException e) {
-                                        throw new RuntimeException(e);
-                                    }
+                                fusedLocationClient.getLocationAvailability().addOnSuccessListener(new
+                                        OnSuccessListener < LocationAvailability > () {
+                                    @Override
+                                    public void onSuccess(LocationAvailability locationAvailability)
+                                    {
+                                        // Checks if the location is still valid
+                                        if (locationAvailability.isLocationAvailable())
+                                        {
+                                            // Logic to handle location object
+                                            double latitude = location.getLatitude();
+                                            double longitude = location.getLongitude();
 
-                                    uploadImage(Uri.fromFile(file), city);
-                                } else {
-                                    // Logic to handle when no location is available
-                                    Toast.makeText(ActivityWeek05.this, "Location not available", Toast.LENGTH_SHORT).show();
-                                    LocationRequest locationRequest = LocationRequest.create()
-                                            .setPriority(LocationRequest.PRIORITY_LOW_POWER)
-                                            .setInterval(10000) // Update interval in milliseconds
-                                            .setFastestInterval(5000); // Fastest update interval
+                                            try {
+                                                // Adds the location to the image metadata
+                                                addLatLonToMetadata(file.getAbsolutePath(), latitude, longitude);
+                                                Log.d("Location Added", String.valueOf(latitude));
+                                                Toast.makeText(ActivityWeek05.this, "Location Added", Toast.LENGTH_SHORT).show();
+                                            } catch (IOException e) {
+                                                throw new RuntimeException(e);
+                                            }
 
-                                    LocationCallback locationCallback = new LocationCallback() {
-                                        @Override
-                                        public void onLocationResult(LocationResult locationResult) {
-                                            if (locationResult == null) {
-                                                Toast.makeText(ActivityWeek05.this, "Location not available", Toast.LENGTH_SHORT).show();
+                                            String city = "Unknown";
+                                            try {
+                                                // Gets the city using geocoder
+                                                city = getCityFromLatLong(latitude, longitude);
+                                            } catch (IOException e) {
+                                                throw new RuntimeException(e);
+                                            }
+                                            // Uploads the image to firebase
+                                            uploadImage(Uri.fromFile(file), city);
+                                        }
+                                        else {
+                                            // Uses location request to get the location
+                                            Toast.makeText(ActivityWeek05.this, "Location not available", Toast.LENGTH_SHORT).show();
+                                            LocationRequest locationRequest = LocationRequest.create()
+                                                    .setPriority(LocationRequest.PRIORITY_LOW_POWER)
+                                                    .setInterval(10000) // Update interval in milliseconds
+                                                    .setFastestInterval(5000); // Fastest update interval
+
+                                            LocationCallback locationCallback = new LocationCallback() {
+                                                @Override
+                                                public void onLocationResult(LocationResult locationResult) {
+                                                    if (locationResult == null) {
+                                                        Toast.makeText(ActivityWeek05.this, "Location not available", Toast.LENGTH_SHORT).show();
+                                                        return;
+                                                    }
+                                                    if (locationResult.getLocations().get(0) != null) {
+                                                        Location location = locationResult.getLocations().get(0);
+                                                        double latitude = location.getLatitude();
+                                                        double longitude = location.getLongitude();
+                                                        try {
+                                                            // Adds the location to the image metadata
+                                                            addLatLonToMetadata(file.getAbsolutePath(), latitude, longitude);
+                                                            Log.d("Location Added", String.valueOf(latitude));
+                                                            Toast.makeText(ActivityWeek05.this, "Location Added", Toast.LENGTH_SHORT).show();
+                                                        } catch (IOException e) {
+                                                            throw new RuntimeException(e);
+                                                        }
+
+                                                        String city = "Unknown";
+                                                        try {
+                                                            // Gets the city using geocoder
+                                                            city = getCityFromLatLong(latitude, longitude);
+                                                        } catch (IOException e) {
+                                                            throw new RuntimeException(e);
+                                                        }
+
+                                                        // Uploads the image to firebase
+                                                        uploadImage(Uri.fromFile(file), city);
+
+                                                    }
+                                                }
+                                            };
+
+                                            if (ActivityCompat.checkSelfPermission(ActivityWeek05.this, android.Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED &&
+                                                    ActivityCompat.checkSelfPermission(ActivityWeek05.this, android.Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+                                                // TODO: Consider calling
+                                                //    ActivityCompat#requestPermissions// here to request the missing permissions, and then overriding
+                                                //   public void onRequestPermissionsResult(int requestCode, String[] permissions,
+                                                //                                          int[] grantResults)
+                                                // to handle the case where the user grants the permission. See the documentation
+                                                // for ActivityCompat#requestPermissions for more details.
                                                 return;
                                             }
-                                            if (locationResult.getLocations().get(0) != null) {
-                                                Location location = locationResult.getLocations().get(0);
-                                                double latitude = location.getLatitude();
-                                                double longitude = location.getLongitude();
-                                                try {
-                                                    addLatLonToMetadata(file.getAbsolutePath(), latitude, longitude);
-                                                    Log.d("Location Added", String.valueOf(latitude));
-                                                    Toast.makeText(ActivityWeek05.this, "Location Added", Toast.LENGTH_SHORT).show();
-                                                } catch (IOException e) {
-                                                    throw new RuntimeException(e);
-                                                }
-
-                                                String city = "Unknown";
-                                                try {
-                                                    city = getCityFromLatLong(latitude, longitude);
-                                                } catch (IOException e) {
-                                                    throw new RuntimeException(e);
-                                                }
-
-                                                uploadImage(Uri.fromFile(file), city);
-
-                                            }
+                                            fusedLocationClient.requestLocationUpdates(locationRequest, locationCallback, null);
                                         }
-                                    };
-
-                                    if (ActivityCompat.checkSelfPermission(ActivityWeek05.this, android.Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED &&
-                                            ActivityCompat.checkSelfPermission(ActivityWeek05.this, android.Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-                                        // TODO: Consider calling
-                                        //    ActivityCompat#requestPermissions// here to request the missing permissions, and then overriding
-                                        //   public void onRequestPermissionsResult(int requestCode, String[] permissions,
-                                        //                                          int[] grantResults)
-                                        // to handle the case where the user grants the permission. See the documentation
-                                        // for ActivityCompat#requestPermissions for more details.
-                                        return;
                                     }
-                                    fusedLocationClient.requestLocationUpdates(locationRequest, locationCallback, null);
-                                }
+                                });
                             }
                         });
 
 
                 ivPreview.setImageBitmap(takenImage);
                 ivPreview.setVisibility(View.VISIBLE);
-
-
 
             } else { // Result was a failure
                 Toast.makeText(this, "Picture wasn't taken!", Toast.LENGTH_SHORT).show();
@@ -397,11 +405,10 @@ public class ActivityWeek05 extends Activity {
                 });
             }
         } else if (requestCode == MY_PERMISSIONS_REQUEST_RECORD_VIDEO) {
-            //if you are running on emulator remove the if statement
-//            if (resultCode == RESULT_OK) {
                 Uri takenVideoUri = getFileUri(videoFileName, 1);
                 scanFile(file.getAbsolutePath());
 
+                // Checks if the app has permission to access the location
                 if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED &&
                         ActivityCompat.checkSelfPermission(this, android.Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
                     // TODO: Consider calling
@@ -414,81 +421,104 @@ public class ActivityWeek05 extends Activity {
                     return;
                 }
 
+                // Attempts to get the last location if still valid
                 fusedLocationClient.getLastLocation()
                         .addOnSuccessListener(this, new OnSuccessListener<Location>() {
                             @Override
                             public void onSuccess(Location location) {
-                                // Got last known location. In some rare situations this can be null.
-                                if (location != null) {
-                                    // Logic to handle location object
-                                    double latitude = location.getLatitude();
-                                    double longitude = location.getLongitude();
-                                    Log.d("Location Added", String.valueOf(latitude));
-                                    Toast.makeText(ActivityWeek05.this, "Location Added", Toast.LENGTH_SHORT).show();
-
-                                    // Save the location to the list and stores it in internal storage
-                                    List<VideoLocation> videoLocations = loadVideoLocationsFromInternalStorage(ActivityWeek05.this);
-                                    videoLocations.add(new VideoLocation(latitude, longitude, takenVideoUri.getPath()));
-                                    saveVideoLocationsToInternalStorage(ActivityWeek05.this, videoLocations);
-
-                                    String city = "Unknown";
-                                    try {
-                                        city = getCityFromLatLong(latitude, longitude);
-                                    } catch (IOException e) {
-                                        throw new RuntimeException(e);
-                                    }
-
-                                    uploadImage(takenVideoUri, city);
-                                } else {
-                                    // Logic to handle when no location is available
-                                    Toast.makeText(ActivityWeek05.this, "Location not available", Toast.LENGTH_SHORT).show();
-                                    LocationRequest locationRequest = LocationRequest.create()
-                                            .setPriority(LocationRequest.PRIORITY_LOW_POWER)
-                                            .setInterval(10000) // Update interval in milliseconds
-                                            .setFastestInterval(5000); // Fastest update interval
-
-                                    LocationCallback locationCallback = new LocationCallback() {
-                                        @Override
-                                        public void onLocationResult(LocationResult locationResult) {
-                                            if (locationResult == null) {
-                                                Toast.makeText(ActivityWeek05.this, "Location not available", Toast.LENGTH_SHORT).show();
-                                                return;
-                                            }
-                                            if (locationResult.getLocations().get(0) != null) {
-                                                Location location = locationResult.getLocations().get(0);
-                                                double latitude = location.getLatitude();
-                                                double longitude = location.getLongitude();
-
-                                                // Save the location to the list and stores it in internal storage
-                                                List<VideoLocation> videoLocations = loadVideoLocationsFromInternalStorage(ActivityWeek05.this);
-                                                videoLocations.add(new VideoLocation(latitude, longitude, takenVideoUri.getPath()));
-                                                saveVideoLocationsToInternalStorage(ActivityWeek05.this, videoLocations);
-
-                                                String city = "Unknown";
-                                                try {
-                                                    city = getCityFromLatLong(latitude, longitude);
-                                                } catch (IOException e) {
-                                                    throw new RuntimeException(e);
-                                                }
-
-                                                uploadImage(Uri.fromFile(file), city);
-
-                                            }
-                                        }
-                                    };
-
-                                    if (ActivityCompat.checkSelfPermission(ActivityWeek05.this, android.Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED
-                                            && ActivityCompat.checkSelfPermission(ActivityWeek05.this, android.Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-                                        // TODO: Consider calling
-                                        //    ActivityCompat#requestPermissions// here to request the missing permissions, and then overriding
-                                        //   public void onRequestPermissionsResult(int requestCode, String[] permissions,
-                                        //                                          int[] grantResults)
-                                        // to handle the case where the user grants the permission. See the documentation
-                                        // for ActivityCompat#requestPermissions for more details.
-                                        return;
-                                    }
-                                    fusedLocationClient.requestLocationUpdates(locationRequest, locationCallback, null);
+                                if (ActivityCompat.checkSelfPermission(getApplicationContext(), android.Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED && ActivityCompat.checkSelfPermission(getApplicationContext(), android.Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+                                    // TODO: Consider calling
+                                    //    ActivityCompat#requestPermissions
+                                    // here to request the missing permissions, and then overriding
+                                    //   public void onRequestPermissionsResult(int requestCode, String[] permissions,
+                                    //                                          int[] grantResults)
+                                    // to handle the case where the user grants the permission. See the documentation
+                                    // for ActivityCompat#requestPermissions for more details.
+                                    return;
                                 }
+                                fusedLocationClient.getLocationAvailability().addOnSuccessListener(new
+                                   OnSuccessListener < LocationAvailability > () {
+                                       @Override
+                                       public void onSuccess(LocationAvailability locationAvailability)
+                                       {
+                                           // Checks if the location is still valid
+                                           if (locationAvailability.isLocationAvailable())
+                                           {
+                                               // Logic to handle location object
+                                               double latitude = location.getLatitude();
+                                               double longitude = location.getLongitude();
+                                               Log.d("Location Added", String.valueOf(latitude));
+                                               Toast.makeText(ActivityWeek05.this, "Location Added", Toast.LENGTH_SHORT).show();
+
+                                               // Save the location to the list and stores it in internal storage
+                                               List<VideoLocation> videoLocations = loadVideoLocationsFromInternalStorage(ActivityWeek05.this);
+                                               videoLocations.add(new VideoLocation(latitude, longitude, takenVideoUri.getPath()));
+                                               saveVideoLocationsToInternalStorage(ActivityWeek05.this, videoLocations);
+
+                                               String city = "Unknown";
+                                               try {
+                                                   // Gets the city using geocoder
+                                                   city = getCityFromLatLong(latitude, longitude);
+                                               } catch (IOException e) {
+                                                   throw new RuntimeException(e);
+                                               }
+                                               // Uploads the image to firebase
+                                               uploadImage(takenVideoUri, city);
+                                           }
+                                           else {
+                                               // Logic to handle when no location is available
+                                               // Uses location request to get the location
+                                               Toast.makeText(ActivityWeek05.this, "Location not available", Toast.LENGTH_SHORT).show();
+                                               LocationRequest locationRequest = LocationRequest.create()
+                                                       .setPriority(LocationRequest.PRIORITY_LOW_POWER)
+                                                       .setInterval(10000) // Update interval in milliseconds
+                                                       .setFastestInterval(5000); // Fastest update interval
+
+                                               LocationCallback locationCallback = new LocationCallback() {
+                                                   @Override
+                                                   public void onLocationResult(LocationResult locationResult) {
+                                                       if (locationResult == null) {
+                                                           Toast.makeText(ActivityWeek05.this, "Location not available", Toast.LENGTH_SHORT).show();
+                                                           return;
+                                                       }
+                                                       if (locationResult.getLocations().get(0) != null) {
+                                                           Location location = locationResult.getLocations().get(0);
+                                                           double latitude = location.getLatitude();
+                                                           double longitude = location.getLongitude();
+
+                                                           // Save the location to the list and stores it in internal storage
+                                                           List<VideoLocation> videoLocations = loadVideoLocationsFromInternalStorage(ActivityWeek05.this);
+                                                           videoLocations.add(new VideoLocation(latitude, longitude, takenVideoUri.getPath()));
+                                                           saveVideoLocationsToInternalStorage(ActivityWeek05.this, videoLocations);
+
+                                                           String city = "Unknown";
+                                                           try {
+                                                               // Gets the city using geocoder
+                                                               city = getCityFromLatLong(latitude, longitude);
+                                                           } catch (IOException e) {
+                                                               throw new RuntimeException(e);
+                                                           }
+                                                           // Uploads the image to firebase
+                                                           uploadImage(Uri.fromFile(file), city);
+
+                                                       }
+                                                   }
+                                               };
+
+                                               if (ActivityCompat.checkSelfPermission(ActivityWeek05.this, android.Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED
+                                                       && ActivityCompat.checkSelfPermission(ActivityWeek05.this, android.Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+                                                   // TODO: Consider calling
+                                                   //    ActivityCompat#requestPermissions// here to request the missing permissions, and then overriding
+                                                   //   public void onRequestPermissionsResult(int requestCode, String[] permissions,
+                                                   //                                          int[] grantResults)
+                                                   // to handle the case where the user grants the permission. See the documentation
+                                                   // for ActivityCompat#requestPermissions for more details.
+                                                   return;
+                                               }
+                                               fusedLocationClient.requestLocationUpdates(locationRequest, locationCallback, null);
+                                           }
+                                       }
+                                   });
                             }
                         });
 
@@ -501,10 +531,14 @@ public class ActivityWeek05 extends Activity {
                         mVideoView.start();
                     }
                 });
-//            }
         }
     }
 
+    /**
+     * Uploads the image to firebase
+     * @param file
+     * @param location
+     */
     private void uploadImage(Uri file, String location) {
         StorageReference riversRef = storageRef.child("images/" + location + "/" + file.getLastPathSegment());
         UploadTask uploadTask = riversRef.putFile(file);
@@ -527,6 +561,13 @@ public class ActivityWeek05 extends Activity {
 
     }
 
+    /**
+     * Gets the city from the latitude and longitude
+     * @param latitude
+     * @param longitude
+     * @return
+     * @throws IOException
+     */
     public String getCityFromLatLong(double latitude, double longitude) throws IOException {
         Log.d("Location sent", latitude + ", " + longitude);
         List<Address> addressList = geocoder.getFromLocation(latitude, longitude, 1);
@@ -549,6 +590,11 @@ public class ActivityWeek05 extends Activity {
 
     }
 
+    /**
+     * Saves the video locations to internal storage
+     * @param context
+     * @param videoLocations
+     */
     public void saveVideoLocationsToInternalStorage(Context context, List<VideoLocation> videoLocations) {
         try {
             FileOutputStream fos = context.openFileOutput("video_locations.dat", Context.MODE_PRIVATE);
@@ -563,6 +609,11 @@ public class ActivityWeek05 extends Activity {
         }
     }
 
+    /**
+     * Loads the video locations from internal storage
+     * @param context
+     * @return
+     */
     public List<VideoLocation> loadVideoLocationsFromInternalStorage(Context context) {
         try {
             FileInputStream fis = context.openFileInput("video_locations.dat");
